@@ -1,0 +1,124 @@
+trigger testTrigger on Account (after insert , after update , before delete) {
+   
+	if(Trigger.isUpdate){ //update parentId field in former children and in current children.
+        UpdateMyFormerChildren(Trigger.new);
+        UpdateMyChildren(Trigger.new , 1);
+    }
+    else if(Trigger.isInsert){ // if child account exist - update parentId field , else - create child account and update parentId field.
+        UpdateMyChildren(Trigger.new , 1);
+    }
+    else if(Trigger.isDelete){  //update children's parent field to null and update my parent account (if exist) description field.
+        UpdateMyChildren(Trigger.old , 2);
+        UpdateMyParent(Trigger.old);
+    }	
+
+    /**
+     * This function handle my children's parent field.
+     *  The case is 1 - update my children's parent field (and create children account if needed)
+     * The case is 2- update my children's parent field to null
+     */ 
+    private static void UpdateMyChildren(list <Account> accountList , Integer caseFlag){
+        //caseFlag:  1 = insert/update , 2 = delete
+        for(Account currAccount : accountList){
+            if(currAccount.Description != null){
+                Id parent = null;
+                if( caseFlag < 2){
+                    parent = [SELECT id FROM Account WHERE name =: currAccount.Name].id;
+                }
+                List <String> childrenNames = currAccount.Description.split(',');
+                for(String currChildName : childrenNames){
+                    Account [] childrenWithSameName = [SELECT id,name FROM Account WHERE name=: currChildName];
+                    if(childrenWithSameName.size() > 0){
+                        for(Account currChildAccount : childrenWithSameName){
+                            currChildAccount.ParentId = parent;
+                           UpdateDataBase(currChildAccount);
+                        }
+                    }
+                    else{
+                        if(caseFlag < 2){
+                          	Account newChildAccount = new Account(name = currChildName , parentId = parent);
+                            UpdateDataBase(newChildAccount);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * This function is trying to update(if exist) or insert(otherwise) the currAccount to the datebase
+     */ 
+    private static void UpdateDataBase(Account currAccount){
+        try{
+            upsert currAccount;
+           
+        }catch(DmlException exc){
+            System.debug('The following exception has occurred' + exc);
+        } 
+    }
+    
+    /**
+     * This function checks if the currAccount.Description contains currChild name.
+	 * Return true-if exist , else-otherwise.
+     */
+     private static Boolean isChildExist(Account currAccount , String currChild){
+         if(currAccount.Description != null){
+             list <String> childrenNames = currAccount.Description.split(',');
+             for(String currChildName : childrenNames){
+                 if(currChildName.equals(currChild)){
+                     return true;
+                 }
+             }
+         }
+         return false;
+     }
+    
+    /**
+     * This function handle the case that child account is deleted.
+     * The function delete the child account name from his the parent account description
+     */
+    private static void UpdateMyParent(list <Account> accountList){
+        for(Account currAccount : accountList){
+            if(currAccount.ParentId != null){
+              	Account [] myParent = [SELECT id,name,description FROM Account WHERE id =:currAccount.ParentId]; 
+                //if there are more accounts with the same name so we dont need to edit the parent description
+                Account [] numberOfAccounts = [SELECT name FROM Account WHERE name =: currAccount.Name]; 
+                if(numberOfAccounts.size() == 1){
+                    String [] childrenNames = myParent[0].Description.split(',');
+                   if(childrenNames.size() == 1){
+                        myParent[0].Description = null;
+                    }
+                    else{
+                        if(childrenNames[0].equals(currAccount.Name)){
+                           myParent[0].Description= myParent[0].Description.remove(currAccount.Name+',');
+                        }
+                        else{
+                            myParent[0].Description=myParent[0].Description.remove(','+currAccount.Name);
+                        }
+                    }
+                    update myParent[0];
+                }
+            }
+        } 
+    }
+    
+    /**
+     * When parent account update his description , it might delete children throw the update.
+     * This function update the former children's parent field by update to null.
+     */
+    private static void UpdateMyFormerChildren(list <Account> accountList){
+        for(Account currAccount: accountList){
+            Id parent = [SELECT id FROM Account WHERE name =: currAccount.Name].id;  // collecting the parent account id
+            Account [] childrenAccount = [SELECT id , name FROM Account WHERE parentId =: parent];
+            if(childrenAccount.size()>0){
+                for(Account currChild : childrenAccount){
+                    // the child name was in description field and now it doesnt
+                    if(!isChildExist(currAccount , currChild.Name)) {
+                        currChild.ParentId = null;
+                        UpdateDataBase(currChild);
+                    }
+                }
+            }
+    	}
+    }    
+}
